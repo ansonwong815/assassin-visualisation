@@ -8,37 +8,25 @@
     #inputArea { width: 100%; height: 150px; font-size: 14px; }
     #graph { width: 100%; height: 600px; border: 1px solid #ccc; margin-top: 20px; }
     button { padding: 10px 20px; font-size: 14px; }
+    #players { margin-top: 20px; }
+    .player-box { display: inline-block; margin-right: 15px; font-size: 14px; }
   </style>
-  <!-- Load Cytoscape.js from CDN -->
   <script src="https://unpkg.com/cytoscape@3.21.1/dist/cytoscape.min.js"></script>
 </head>
 <body>
   <h1>Senior Assassin Visualizer</h1>
-  <p>
-    Enter game rounds data in the following format (one per line): 
-    <code>NameA -> NameB</code> 
-    meaning that at some point player <strong>NameA</strong> had <strong>NameB</strong> as a target.
-    When a player kills its target the next target is taken from that killed player’s assignment.
-    For example, if the input is:
-  </p>
-  <pre>
-a -> b
-a -> c
-  </pre>
-  <p>
-    it will be interpreted as: initially, a’s target was b, and when b was killed, a’s new target became c, so the original chain was a → b → c.
-  </p>
   <textarea id="inputArea" placeholder="Enter rounds data here..."></textarea><br>
   <button onclick="visualize()">Visualize</button>
+  <div id="players"></div>
   <div id="graph"></div>
 
   <script>
-    // Parse the input text into rounds with { killer, victim }
+    let playerStatus = {};
+
     function parseInput(input) {
       const lines = input.split('\n').map(line => line.trim()).filter(line => line);
       const rounds = [];
       lines.forEach(line => {
-        // Expecting format: "NameA -> NameB"
         const parts = line.split("->").map(s => s.trim());
         if (parts.length === 2 && parts[0] && parts[1]) {
           rounds.push({ killer: parts[0], victim: parts[1] });
@@ -47,29 +35,21 @@ a -> c
       return rounds;
     }
 
-    // Reconstruct initial chains using the following logic:
-    // - For each killer, record the edge from the killer to its first victim.
-    // - For subsequent rounds by the same killer, record an edge from the previous victim to the new victim.
     function reconstructEdges(rounds) {
       const killerMap = {};
       rounds.forEach((round, index) => {
         if (!killerMap[round.killer]) {
           killerMap[round.killer] = [];
         }
-        // Record the round index and victim
         killerMap[round.killer].push({ index: index, victim: round.victim });
       });
 
-      // Prepare a list of edges based on the above rules.
       const edges = [];
       for (const killer in killerMap) {
-        // Sort rounds for each killer by their appearance order.
         const roundsList = killerMap[killer].sort((a, b) => a.index - b.index);
-        // First round: edge from killer to first victim.
         if (roundsList.length >= 1) {
           edges.push({ source: killer, target: roundsList[0].victim });
         }
-        // Subsequent rounds: edge from previous victim to current victim.
         for (let i = 1; i < roundsList.length; i++) {
           edges.push({ source: roundsList[i - 1].victim, target: roundsList[i].victim });
         }
@@ -77,7 +57,6 @@ a -> c
       return edges;
     }
 
-    // Build nodes from rounds and edges.
     function buildNodes(rounds, edges) {
       const players = new Set();
       rounds.forEach(r => {
@@ -88,39 +67,66 @@ a -> c
         players.add(e.source);
         players.add(e.target);
       });
-      const nodes = [];
+
+      // Initialize player status (if new)
       players.forEach(player => {
-        nodes.push({ data: { id: player, label: player } });
+        if (!(player in playerStatus)) {
+          playerStatus[player] = true; // Default to alive
+        }
       });
-      return nodes;
+
+      return Array.from(players).map(player => ({
+        data: { id: player, label: player, alive: playerStatus[player] }
+      }));
     }
 
-    // Create a graph visualization using Cytoscape.js
+    function createPlayerCheckboxes(players) {
+      const playersDiv = document.getElementById("players");
+      playersDiv.innerHTML = "<h2>Player Status</h2>";
+
+      players.forEach(player => {
+        const div = document.createElement("div");
+        div.className = "player-box";
+        div.innerHTML = `
+          <label>
+            <input type="checkbox" id="check_${player}" ${playerStatus[player] ? "checked" : ""} 
+              onchange="togglePlayer('${player}')"> ${player}
+          </label>`;
+        playersDiv.appendChild(div);
+      });
+    }
+
+    function togglePlayer(player) {
+      playerStatus[player] = !playerStatus[player];
+      updateGraphColors();
+    }
+
+    function updateGraphColors() {
+      window.cy.nodes().forEach(node => {
+        const player = node.id();
+        node.style("background-color", playerStatus[player] ? "#0074D9" : "#777"); 
+      });
+    }
+
     function visualize() {
       const inputText = document.getElementById('inputArea').value;
       const rounds = parseInput(inputText);
       const edgesList = reconstructEdges(rounds);
       const nodesList = buildNodes(rounds, edgesList);
+      createPlayerCheckboxes(nodesList.map(n => n.data.id));
 
-      // Prepare elements: nodes and edges.
       const elements = [];
       nodesList.forEach(node => elements.push(node));
       edgesList.forEach(edge => {
         elements.push({
-          data: {
-            id: edge.source + "_" + edge.target,
-            source: edge.source,
-            target: edge.target
-          }
+          data: { id: edge.source + "_" + edge.target, source: edge.source, target: edge.target }
         });
       });
 
-      // If a previous instance exists, destroy it.
       if (window.cy) {
         window.cy.destroy();
       }
 
-      // Create Cytoscape instance with larger nodes to accommodate longer names.
       window.cy = cytoscape({
         container: document.getElementById('graph'),
         elements: elements,
@@ -129,14 +135,15 @@ a -> c
             selector: 'node',
             style: {
               'label': 'data(label)',
-              'background-color': '#0074D9',
+              'background-color': function(ele) {
+                return playerStatus[ele.id()] ? "#0074D9" : "#777"; 
+              },
               'color': '#fff',
               'text-valign': 'center',
               'text-halign': 'center',
               'width': '80px',
               'height': '80px',
-              'font-size': '12px',
-              'text-wrap': 'wrap'
+              'font-size': '12px'
             }
           },
           {
